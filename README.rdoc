@@ -1,3 +1,5 @@
 = GeonamesDump
 
 This project rocks and uses MIT-LICENSE.
+
+based on : https://github.com/kmmndr/geonames_dump
