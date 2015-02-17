@@ -22,6 +22,6 @@ rake geonames:install
 ```
 
 
-## Use
+## Use cases
 
 

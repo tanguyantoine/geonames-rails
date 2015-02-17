@@ -8,6 +8,10 @@ class GeonamesFeature < ActiveRecord::Base
     :foreign_key => 'geonameid'
   alias_method :alternate_names, :geonames_alternate_names
 
+  belongs_to :country, 
+              primary_key: :iso, 
+              foreign_key: :country_code,
+              class_name: :GeonamesCountry
   ##
   # Search for feature, searches might include country (separated by ',')
   #
@@ -35,7 +39,7 @@ class GeonamesFeature < ActiveRecord::Base
   # Find by names
   #
   scope :by_name, lambda { |*queries|
-    ret = self.scoped
+    ret = self
     count = queries.count
     queries.collect.with_index do |q, idx|
       query = idx == 0 ? "#{q}" : "%#{q}%"

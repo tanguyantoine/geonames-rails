@@ -17,7 +17,8 @@ namespace :geonames do
         :tld, :currency_code, :currency_name, :phone, :postal_code_format, :postal_code_regex,
         :languages, :geonameid, :neighbours, :equivalent_fips_code
       ]
-    GEONAMES_ADMINS_COL_NAME = [ :code, :name, :asciiname, :geonameid ]
+    GEONAMES_ADMINS_COL_NAME = [ :country_code, :admin1_code, :name, :asciiname, :geonameid ]
+    GEONAMES_ADMINS2_COL_NAME = [ :country_code, :admin1_code, :admin2_code, :name, :asciiname, :geonameid ]
 
     desc 'Prepare everything to import data'
     
@@ -30,7 +31,7 @@ namespace :geonames do
     end
 
     desc 'Import ALL geonames data.'
-    task :all => [:many, :features]
+    task :all => [:many]
 
     desc 'Import most of geonames data. Recommended after a clean install.'
     task :many => [:prepare, :countries, :cities15000, :admin1, :admin2]
@@ -38,19 +39,30 @@ namespace :geonames do
     desc 'Import all cities, regardless of population.'
     task :cities => [:prepare, :cities15000, :cities5000, :cities1000]
 
+    class Array
+      def rjust!(n, x); insert(0, *Array.new([0, n-length].max, x)) end
+      def ljust!(n, x); fill(x, length...n) end
+      def ljust(n, x); dup.fill(x, length...n) end
+      def rjust(n, x); Array.new([0, n-length].max, x)+self end
+    end
+
     desc 'Import feature data. Specify Country ISO code (example : COUNTRY=FR) for just a single country. NOTE: This task can take a long time!'
     task :features => [:prepare, :environment] do
       download_file = ENV['COUNTRY'].present? ? ENV['COUNTRY'].upcase : 'allCountries'
-      zip_filename = download_file+'.zip'
-
-      txt_file = get_or_download("http://download.geonames.org/export/dump/#{zip_filename}")
-
-      # Import into the database.
+      txt_file = get_or_download("http://download.geonames.org/export/dump/#{download_file}.zip")
+      # see http://www.geonames.org/export/codes.html
+      ALLOWED_FEATURE_CLASS = Set.new(['A', 'P']).freeze
+      FEATURE_CLASS_INDEX   =  6.freeze
+      BUFFER                = 1000.freeze
+      items = []
+      filter_proc = ->(row){
+        ALLOWED_FEATURE_CLASS.include?(row[FEATURE_CLASS_INDEX])
+      }
       File.open(txt_file) do |f|
-        # TODO: add feature selection
-        insert_data(f, GEONAMES_FEATURES_COL_NAME, GeonamesCity, :title => "Features")
+        insert_data(f, GEONAMES_FEATURES_COL_NAME, GeonamesCity, title: "Features", filter: filter_proc)
       end
     end
+
 
     # geonames:import:citiesNNN where NNN is population size.
     %w[15000 5000 1000].each do |population|
@@ -60,7 +72,7 @@ namespace :geonames do
         txt_file = get_or_download("http://download.geonames.org/export/dump/cities#{population}.zip")
 
         File.open(txt_file) do |f|
-          insert_data(f, GEONAMES_FEATURES_COL_NAME, GeonamesCity, :title => "cities of #{population}")
+          insert_data(f, GEONAMES_FEATURES_COL_NAME, GeonamesCity, title: "cities of #{population}")
         end
       end
     end
@@ -104,17 +116,11 @@ namespace :geonames do
       txt_file = get_or_download('http://download.geonames.org/export/dump/admin1CodesASCII.txt')
 
       File.open(txt_file) do |f|
-        insert_data(f, GEONAMES_ADMINS_COL_NAME, GeonamesAdmin1, :title => "Admin1 subdivisions") do |klass, attributes, col_value, idx|
-          col_value.gsub!('(general)', '')
-          col_value.strip!
-          if idx == 0
-            country, admin1 = col_value.split('.')
-            attributes[:country_code] = country.strip
-            attributes[:admin1_code] = admin1.strip rescue nil
-          else
-            attributes[GEONAMES_ADMINS_COL_NAME[idx]] = col_value
-          end
-        end
+        prepare = ->(row) {
+          row[0] = row[0].split('.').ljust(2, '')
+          row.flatten
+        }
+        insert_data(f, GEONAMES_ADMINS_COL_NAME, GeonamesAdmin1, title: "Admin1 subdivisions", row_prepare: prepare)
       end
     end
 
@@ -123,21 +129,170 @@ namespace :geonames do
       txt_file = get_or_download('http://download.geonames.org/export/dump/admin2Codes.txt')
 
       File.open(txt_file) do |f|
-        insert_data(f, GEONAMES_ADMINS_COL_NAME, GeonamesAdmin2, :title => "Admin2 subdivisions") do |klass, attributes, col_value, idx|
-          col_value.gsub!('(general)', '')
-          if idx == 0
-            country, admin1, admin2 = col_value.split('.')
-            attributes[:country_code] = country.strip
-            attributes[:admin1_code] = admin1.strip #rescue nil
-            attributes[:admin2_code] = admin2.strip #rescue nil
-          else
-            attributes[GEONAMES_ADMINS_COL_NAME[idx]] = col_value
-          end
-        end
+        prepare = ->(row) {
+          row[0] = row[0].split('.').ljust(2, '')
+          row.flatten
+        }
+        insert_data(f, GEONAMES_ADMINS2_COL_NAME, GeonamesAdmin2, title: "Admin2 subdivisions", row_prepare: prepare)
       end
     end
 
     private
+      ESCAPE_PROC = ->(val) {
+        return val || 'NULL' unless val.is_a?(String)
+        return 'NULL'  unless val.length > 0
+        "'#{val.gsub("'", "''")}'"
+      }
+
+    def casters_for_klass(klass, cols)
+      cols.inject([]) do |acc, col_name|
+        begin
+          acc << klass.columns.detect{|c| c.name == col_name.to_s }.cast_type
+        rescue
+          puts col_name.inspect
+          raise 'error'
+        end
+
+        acc
+      end
+    end
+
+    def insert_items(items, cols, klass, caster)
+      query = "insert into #{klass.table_name} (#{cols.join(', ')}) values " 
+      items.each do |row|
+        query << '('
+        row = caster.call(row) do |val|
+          ESCAPE_PROC.call(val)
+        end
+        query << row.join(', ')
+        query << '),'
+      end
+      query.slice!(-1) # remove last ','  
+      ActiveRecord::Base.connection.execute query
+    end
+
+    def insert_data(file_fd, col_names, main_klass = GeonamesFeature, options = {}, &block)
+      # Setup nice progress output.
+      file_size = file_fd.stat.size
+      title = options[:title] || 'Feature Import'
+      buffer = options[:buffer] || 1000
+      primary_key = options[:primary_key] || :geonameid
+      progress_bar = ProgressBar.create(:title => title, :total => file_size, :format => '%a |%b>%i| %p%% %t')
+      filter = options[:filter]
+
+      polymorphic = !main_klass.columns.detect{|c| c.name == 'type' }.nil?
+      col_names = col_names  + [ :type ]  if polymorphic
+      # create block array
+      # blocks = Geonames::Blocks.new
+      loops = 0
+      casters = casters_for_klass(main_klass, col_names)
+      col_count = col_names.length
+      items = []
+      row_prepare = options[:row_prepare]
+      cast_proc = -> (row, &block) { 
+        row.each_with_index.map{ |el, i| 
+          begin
+            val = casters[i].type_cast_for_database(el) 
+          rescue
+            puts val
+            raise "ok"
+          end
+          val = block.call(val) 
+          val
+        }
+      }
+
+      line_counter = 0
+      file_fd.each_line do |line|
+        # skip comments
+
+        next if line.start_with?('#')
+        row = line.strip.split("\t")
+        row << main_klass.name if polymorphic
+        row = row_prepare.call(row) if row_prepare
+        row.ljust!(col_count, '')
+
+        next if filter && filter.call(row)
+
+        line_counter += 1
+        items << row
+        if line_counter % buffer == 0
+          loops += 1
+          puts "Insert items #{buffer * loops}."
+          insert_items(items, col_names, main_klass, cast_proc )
+          line_counter = 0
+          items.clear
+        end
+        # move progress bar
+        progress_bar.progress = file_fd.pos
+      end
+      insert_items(items, col_names, main_klass, cast_proc)
+
+
+
+
+
+        # klass = main_klass
+
+        # # skip comments
+        # next if line.start_with?('#')
+
+        # line_counter += 1
+
+        # # read values
+        # line.strip.split("\t").each_with_index do |col_value, idx|
+        #   col = col_names[idx]
+
+        #   # skip leading and trailing whitespace
+        #   col_value.strip!
+
+        #   # block may change the type of object to create
+        #   if block_given?
+        #     yield klass, attributes, col_value, idx
+        #   else
+        #     attributes[col] = col_value
+        #   end
+        # end
+
+        # create or update object
+        #if filter?(attributes) && (block && block.call(attributes))
+        # blocks.add_block do
+        #   primary_keys = primary_key.is_a?(Array) ? primary_key : [primary_key]
+        #   if primary_keys.all? { |key| attributes.include?(key) }
+        #     if ENV['QUICK']
+        #       object = klass.create(attributes)
+        #     else
+        #       where_condition = {}
+        #       primary_keys.each do |key|
+        #         where_condition[key] = attributes[key]
+        #       end
+        #       object = klass.where(where_condition).first_or_initialize
+        #       object.update_attributes(attributes)
+        #       object.save if object.new_record? || object.changed?
+        #     end
+        #   else
+        #     klass.create(attributes)
+        #   end
+        # end
+
+        # increase import speed by performing insert using transaction
+      #   if line_counter % buffer == 0
+      #     ActiveRecord::Base.transaction do
+      #       blocks.call_and_reset
+      #     end
+      #     line_counter = 0
+      #   end
+
+      #   # move progress bar
+      #   progress_bar.progress = file_fd.pos
+      # end
+
+      # unless blocks.empty?
+      #   ActiveRecord::Base.transaction do
+      #     blocks.call_and_reset
+      #   end
+      # end
+    end
 
     def disable_logger
       ActiveRecord::Base.logger = Logger.new('/dev/null')
@@ -197,82 +352,7 @@ namespace :geonames do
       return res.body
     end
 
-    def insert_data(file_fd, col_names, main_klass = GeonamesFeature, options = {}, &block)
-      # Setup nice progress output.
-      file_size = file_fd.stat.size
-      title = options[:title] || 'Feature Import'
-      buffer = options[:buffer] || 1000
-      primary_key = options[:primary_key] || :geonameid
-      progress_bar = ProgressBar.create(:title => title, :total => file_size, :format => '%a |%b>%i| %p%% %t')
 
-      # create block array
-      blocks = Geonames::Blocks.new
-      line_counter = 0
-
-      file_fd.each_line do |line|
-        # prepare data
-        attributes = {}
-        klass = main_klass
-
-        # skip comments
-        next if line.start_with?('#')
-
-        line_counter += 1
-
-        # read values
-        line.strip.split("\t").each_with_index do |col_value, idx|
-          col = col_names[idx]
-
-          # skip leading and trailing whitespace
-          col_value.strip!
-
-          # block may change the type of object to create
-          if block_given?
-            yield klass, attributes, col_value, idx
-          else
-            attributes[col] = col_value
-          end
-        end
-
-        # create or update object
-        #if filter?(attributes) && (block && block.call(attributes))
-        blocks.add_block do
-          primary_keys = primary_key.is_a?(Array) ? primary_key : [primary_key]
-          if primary_keys.all? { |key| attributes.include?(key) }
-            if ENV['QUICK']
-              object = klass.create(attributes)
-            else
-              where_condition = {}
-              primary_keys.each do |key|
-                where_condition[key] = attributes[key]
-              end
-              object = klass.where(where_condition).first_or_initialize
-              object.update_attributes(attributes)
-              object.save if object.new_record? || object.changed?
-            end
-          else
-            klass.create(attributes)
-          end
-        end
-
-        # increase import speed by performing insert using transaction
-        if line_counter % buffer == 0
-          ActiveRecord::Base.transaction do
-            blocks.call_and_reset
-          end
-          line_counter = 0
-        end
-
-        # move progress bar
-        progress_bar.progress = file_fd.pos
-      end
-
-      unless blocks.empty?
-        ActiveRecord::Base.transaction do
-          blocks.call_and_reset
-        end
-      end
-    end
 
     # Return true when either:
     #  no filter keys apply.

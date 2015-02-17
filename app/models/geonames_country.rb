@@ -22,4 +22,16 @@ class GeonamesCountry < ActiveRecord::Base
     where("country LIKE ?", "#{q}%")
   }
 
+  has_many :cities, 
+            primary_key: :iso, 
+            foreign_key: :country_code,
+            class_name: :GeonamesCity
+
+  def admin1
+    GeonamesAdmin1.where(country_code: iso)
+  end
+
+  def admin2
+    GeonamesAdmin2.where(country_code: iso)
+  end
 end
