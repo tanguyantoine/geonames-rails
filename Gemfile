@@ -14,3 +14,4 @@ gemspec
 # gem 'debugger'
 
 gem 'rubyzip' 
+gem 'ruby-progressbar'

@@ -7,17 +7,19 @@ require "geonames/version"
 Gem::Specification.new do |s|
   s.name        = "geonames"
   s.version     = Geonames::VERSION
-  s.authors     = ["TODO: Your name"]
-  s.email       = ["TODO: Your email"]
-  s.homepage    = "TODO"
-  s.summary     = "TODO: Summary of Geonames."
-  s.description = "TODO: Description of Geonames."
+  s.authors     = ["TANGUY Antoine"]
+  s.email       = ["antoine@tanguy.fr"]
+  s.homepage    = "http://www.google.fr"
+  s.summary     = "Use geonames datas"
+  s.description = "Description of Geonames."
 
   s.files = Dir["{app,config,db,lib}/**/*", "MIT-LICENSE", "Rakefile", "README.rdoc"]
-  s.files = `git ls-files`.split("\n") - %w[geonames.gemspec Gemfile]
+  s.files = `git ls-files`.split("\n") - %w[Gemfile]
   s.test_files = Dir["test/**/*"]
   s.require_paths = ["lib"]
 
   s.add_dependency "rails", "~> 4"
+  s.add_runtime_dependency 'ruby-progressbar'
+  s.add_runtime_dependency 'rubyzip'
 
 end
