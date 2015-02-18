@@ -90,14 +90,18 @@ namespace :geonames do
     task :alternate_names => [:prepare, :environment] do
       txt_file = get_or_download('http://download.geonames.org/export/dump/alternateNames.zip',
                                  txt_file: 'alternateNames.txt')
-
+      LOCALES = Set.new(I18n.available_locales.map(&:to_s))
+      LOCALE_INDEX  = GEONAMES_ALTERNATE_NAMES_COL_NAME.index(:isolanguage)
+      filter = ->(row) { 
+        !LOCALES.include?(row[LOCALE_INDEX])
+      }
       File.open(txt_file) do |f|
         insert_data(f,
                     GEONAMES_ALTERNATE_NAMES_COL_NAME,
                     GeonamesAlternateName,
                     :title => "Alternate names",
                     :buffer => 10000,
-                    :primary_key => [:alternate_name_id, :geonameid])
+                    :primary_key => [:alternate_name_id, :geonameid], filter: filter)
       end
     end
 
@@ -227,71 +231,6 @@ namespace :geonames do
         progress_bar.progress = file_fd.pos
       end
       insert_items(items, col_names, main_klass, cast_proc)
-
-
-
-
-
-        # klass = main_klass
-
-        # # skip comments
-        # next if line.start_with?('#')
-
-        # line_counter += 1
-
-        # # read values
-        # line.strip.split("\t").each_with_index do |col_value, idx|
-        #   col = col_names[idx]
-
-        #   # skip leading and trailing whitespace
-        #   col_value.strip!
-
-        #   # block may change the type of object to create
-        #   if block_given?
-        #     yield klass, attributes, col_value, idx
-        #   else
-        #     attributes[col] = col_value
-        #   end
-        # end
-
-        # create or update object
-        #if filter?(attributes) && (block && block.call(attributes))
-        # blocks.add_block do
-        #   primary_keys = primary_key.is_a?(Array) ? primary_key : [primary_key]
-        #   if primary_keys.all? { |key| attributes.include?(key) }
-        #     if ENV['QUICK']
-        #       object = klass.create(attributes)
-        #     else
-        #       where_condition = {}
-        #       primary_keys.each do |key|
-        #         where_condition[key] = attributes[key]
-        #       end
-        #       object = klass.where(where_condition).first_or_initialize
-        #       object.update_attributes(attributes)
-        #       object.save if object.new_record? || object.changed?
-        #     end
-        #   else
-        #     klass.create(attributes)
-        #   end
-        # end
-
-        # increase import speed by performing insert using transaction
-      #   if line_counter % buffer == 0
-      #     ActiveRecord::Base.transaction do
-      #       blocks.call_and_reset
-      #     end
-      #     line_counter = 0
-      #   end
-
-      #   # move progress bar
-      #   progress_bar.progress = file_fd.pos
-      # end
-
-      # unless blocks.empty?
-      #   ActiveRecord::Base.transaction do
-      #     blocks.call_and_reset
-      #   end
-      # end
     end
 
     def disable_logger

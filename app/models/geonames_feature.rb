@@ -12,6 +12,8 @@ class GeonamesFeature < ActiveRecord::Base
               primary_key: :iso, 
               foreign_key: :country_code,
               class_name: :GeonamesCountry
+              
+  has_many :names, ->(){ where(isolanguage: I18n.available_locales) }, class_name: :GeonamesAlternateName, primary_key: :geonameid, foreign_key: :geonameid
   ##
   # Search for feature, searches might include country (separated by ',')
   #
